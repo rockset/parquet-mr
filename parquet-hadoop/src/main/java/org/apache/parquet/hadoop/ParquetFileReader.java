@@ -109,6 +109,7 @@ import org.apache.parquet.internal.filter2.columnindex.ColumnIndexStore;
 import org.apache.parquet.internal.filter2.columnindex.RowRanges;
 import org.apache.parquet.internal.hadoop.metadata.IndexReference;
 import org.apache.parquet.io.InputFile;
+import org.apache.parquet.io.MemoryMappedInputStream;
 import org.apache.parquet.io.ParquetDecodingException;
 import org.apache.parquet.io.SeekableInputStream;
 import org.apache.parquet.schema.MessageType;
@@ -1683,26 +1684,32 @@ public class ParquetFileReader implements Closeable {
      * @throws IOException if there is an error while reading from the stream
      */
     public void readAll(SeekableInputStream f, ChunkListBuilder builder) throws IOException {
-      List<Chunk> result = new ArrayList<Chunk>(chunks.size());
-      f.seek(offset);
+      List<ByteBuffer> buffers;
 
-      int fullAllocations = length / options.getMaxAllocationSize();
-      int lastAllocationSize = length % options.getMaxAllocationSize();
+      if (f instanceof MemoryMappedInputStream) {
+        ByteBuffer buf = ((MemoryMappedInputStream)f).slice(offset, length);
+        buffers = Collections.singletonList(buf);
+      } else {
+        f.seek(offset);
 
-      int numAllocations = fullAllocations + (lastAllocationSize > 0 ? 1 : 0);
-      List<ByteBuffer> buffers = new ArrayList<>(numAllocations);
+        int fullAllocations = length / options.getMaxAllocationSize();
+        int lastAllocationSize = length % options.getMaxAllocationSize();
 
-      for (int i = 0; i < fullAllocations; i += 1) {
-        buffers.add(options.getAllocator().allocate(options.getMaxAllocationSize()));
-      }
+        int numAllocations = fullAllocations + (lastAllocationSize > 0 ? 1 : 0);
+        buffers = new ArrayList<>(numAllocations);
 
-      if (lastAllocationSize > 0) {
-        buffers.add(options.getAllocator().allocate(lastAllocationSize));
-      }
+        for (int i = 0; i < fullAllocations; i += 1) {
+          buffers.add(options.getAllocator().allocate(options.getMaxAllocationSize()));
+        }
 
-      for (ByteBuffer buffer : buffers) {
-        f.readFully(buffer);
-        buffer.flip();
+        if (lastAllocationSize > 0) {
+          buffers.add(options.getAllocator().allocate(lastAllocationSize));
+        }
+
+        for (ByteBuffer buffer : buffers) {
+          f.readFully(buffer);
+          buffer.flip();
+        }
       }
 
       // report in a counter the data we just scanned
